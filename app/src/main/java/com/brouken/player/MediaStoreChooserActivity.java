@@ -133,11 +133,21 @@ public class MediaStoreChooserActivity extends Activity {
         return sortedMap;
     }
 
+    /** Purist: subtitle files MediaStore classifies as subtitles, plus the extra formats it doesn't know. */
+    private static String subtitleSelection() {
+        StringBuilder sb = new StringBuilder("(" + MediaStore.Files.FileColumns.MEDIA_TYPE + "=" + MediaStore.Files.FileColumns.MEDIA_TYPE_SUBTITLE);
+        for (String ext : Utils.supportedExtensionsSubtitle) {
+            if (!ext.matches("[a-z0-9]+")) continue;
+            sb.append(" OR LOWER(").append(MediaStore.MediaColumns.DISPLAY_NAME).append(") LIKE '%.").append(ext).append("'");
+        }
+        return sb.append(")").toString();
+    }
+
     @RequiresApi(api = Build.VERSION_CODES.R)
     void showBuckets() {
         String selection = "";
         if (subtitles) {
-            selection += MediaStore.Files.FileColumns.MEDIA_TYPE + "=" + MediaStore.Files.FileColumns.MEDIA_TYPE_SUBTITLE;
+            selection += subtitleSelection();
         }
 
         HashMap<Integer, String> buckets = query(MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, selection);
@@ -169,7 +179,7 @@ public class MediaStoreChooserActivity extends Activity {
         String selection = MediaStore.MediaColumns.BUCKET_ID + "=" + bucketId;
 
         if (subtitles) {
-            selection += " AND " + MediaStore.Files.FileColumns.MEDIA_TYPE + "=" + MediaStore.Files.FileColumns.MEDIA_TYPE_SUBTITLE;
+            selection += " AND " + subtitleSelection();
         }
 
         HashMap<Integer, String> files = query(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, selection);

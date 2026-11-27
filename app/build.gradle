@@ -5,11 +5,34 @@ plugins {
 android {
     namespace 'com.brouken.player'
     compileSdk = 37
-    ndkVersion '29.0.14206865'
+    // Purist: no ndkVersion pin. Nothing native is compiled here; the bundled .so files are already
+    // stripped, so they are packaged as-is and no NDK download is needed.
+    packaging {
+        jniLibs {
+            keepDebugSymbols += ['**/*.so']
+        }
+    }
+
+    // Purist: release signing from an untracked keystore.properties (storeFile, storePassword, keyAlias, keyPassword)
+    def keystorePropsFile = rootProject.file('keystore.properties')
+    def keystoreProps = new Properties()
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.withInputStream { keystoreProps.load(it) }
+    }
+    signingConfigs {
+        if (keystorePropsFile.exists()) {
+            purist {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
 
     defaultConfig {
         def abiFilter = project.findProperty("abiFilter")
-        applicationId "com.brouken.player"
+        applicationId "com.brouken.player.purist"
         minSdkVersion 24
         targetSdkVersion 36
         versionCode 221
@@ -23,10 +46,17 @@ android {
         }
     }
     base {
-        archivesName = "Just.Player.v${defaultConfig.versionName}"
+        archivesName = "Purist.Player.v${defaultConfig.versionName}"
     }
     buildTypes {
+        debug {
+            // Purist: debug builds install side by side with the release build
+            applicationIdSuffix ".debug"
+        }
         release {
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.purist
+            }
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -119,4 +149,13 @@ dependencies {
     implementation project(path: ':doubletapplayerview')
     implementation project(path: ':android-file-chooser')
     implementation fileTree(dir: "libs", include: ["lib-*.aar"])
+    // Purist: libass (full ASS/SSA rendering). Only the overlay render path is used: subtitles are drawn in a
+    // normal view above the video, never into the video frames (keeps Dolby Vision / HDR decoding untouched).
+    // ExoPlayer and UI come from the patched local AARs above; media3-effect is aligned to our Media3 version.
+    implementation("io.github.peerless2012:ass-media:0.6.0-beta01") {
+        exclude group: "androidx.media3", module: "media3-exoplayer"
+        exclude group: "androidx.media3", module: "media3-ui"
+    }
+    implementation "io.github.peerless2012:ass-kt:0.6.0-beta01"
+    implementation "androidx.media3:media3-effect:$media3_version"
 }

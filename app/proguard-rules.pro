@@ -33,4 +33,9 @@
 # PlayerActivity
 -keepclassmembers class androidx.media3.ui.PlayerControlView {
     private androidx.media3.ui.TrackNameProvider trackNameProvider;
+    # Purist: gear popup delegates "Playback speed" / "Audio track" to Media3
+    private void onSettingViewClicked(int);
 }
+
+# Purist: libass JNI enums/frames passed to native code
+-keep class io.github.peerless2012.ass.** { *; }

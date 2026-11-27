@@ -48,6 +48,85 @@
 
     <PreferenceCategory app:title="@string/pref_subtitle_header">
 
+        <!-- Purist: same keys as the in-player subtitle panel (SubtitleStyleConfig) -->
+        <ListPreference
+            app:key="puristSubStyleSource"
+            app:defaultValue="custom"
+            app:entries="@array/purist_sub_source_entries"
+            app:entryValues="@array/purist_sub_source_values"
+            app:title="@string/purist_sub_style_source"
+            app:useSimpleSummaryProvider="true" />
+
+        <SeekBarPreference
+            app:key="puristSubSize"
+            app:defaultValue="100"
+            app:min="50"
+            android:max="200"
+            app:seekBarIncrement="5"
+            app:showSeekBarValue="true"
+            app:title="@string/purist_sub_size_title" />
+
+        <ListPreference
+            app:key="puristSubTextColor"
+            app:defaultValue="#FFFFFFFF"
+            app:entries="@array/purist_color_entries"
+            app:entryValues="@array/purist_color_values"
+            app:title="@string/purist_sub_text_color"
+            app:useSimpleSummaryProvider="true" />
+
+        <ListPreference
+            app:key="puristSubEdgeType"
+            app:defaultValue="1"
+            app:entries="@array/purist_edge_entries"
+            app:entryValues="@array/purist_edge_values"
+            app:title="@string/purist_sub_border"
+            app:useSimpleSummaryProvider="true" />
+
+        <ListPreference
+            app:key="puristSubEdgeColor"
+            app:defaultValue="#FF000000"
+            app:entries="@array/purist_color_entries"
+            app:entryValues="@array/purist_color_values"
+            app:title="@string/purist_sub_border_color"
+            app:useSimpleSummaryProvider="true" />
+
+        <ListPreference
+            app:key="puristSubBgColor"
+            app:defaultValue="#FF000000"
+            app:entries="@array/purist_color_entries"
+            app:entryValues="@array/purist_color_values"
+            app:title="@string/purist_sub_background_color"
+            app:useSimpleSummaryProvider="true" />
+
+        <SeekBarPreference
+            app:key="puristSubBgOpacity"
+            app:defaultValue="0"
+            app:min="0"
+            android:max="100"
+            app:seekBarIncrement="5"
+            app:showSeekBarValue="true"
+            app:title="@string/purist_sub_bg_opacity_title" />
+
+        <SeekBarPreference
+            app:key="puristSubPosition"
+            app:defaultValue="5"
+            app:min="0"
+            android:max="30"
+            app:showSeekBarValue="true"
+            app:title="@string/purist_sub_position_title" />
+
+        <SwitchPreferenceCompat
+            app:key="puristSubEmbeddedFontSizes"
+            app:defaultValue="true"
+            app:title="@string/purist_sub_embedded_sizes" />
+
+        <SwitchPreferenceCompat
+            app:key="puristSubAssLibass"
+            app:defaultValue="true"
+            android:summaryOn="@string/purist_sub_libass_on"
+            android:summaryOff="@string/purist_sub_libass_off"
+            app:title="@string/purist_sub_libass" />
+
         <SwitchPreferenceCompat
             app:key="subtitleStyleEmbedded"
             app:defaultValue="true"
@@ -95,6 +174,14 @@
             app:summaryOn="@string/pref_map_dv7_on"
             app:summaryOff="@string/pref_map_dv7_off"
             app:title="@string/pref_map_dv7" />
+
+        <!-- Purist: debug builds only (hidden in release by SettingsActivity) -->
+        <SwitchPreferenceCompat
+            app:key="puristDebugForceDvBaseLayer"
+            app:defaultValue="false"
+            app:isPreferenceVisible="false"
+            app:summary="@string/purist_debug_force_dv_base_layer_summary"
+            app:title="@string/purist_debug_force_dv_base_layer" />
 
     </PreferenceCategory>
 

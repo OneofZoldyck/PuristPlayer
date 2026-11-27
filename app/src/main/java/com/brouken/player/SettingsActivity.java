@@ -83,6 +83,11 @@ public class SettingsActivity extends AppCompatActivity {
         public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
             setPreferencesFromResource(R.xml.root_preferences, rootKey);
 
+            Preference preferenceDebugForceDv = findPreference("puristDebugForceDvBaseLayer");
+            if (preferenceDebugForceDv != null) {
+                preferenceDebugForceDv.setVisible(BuildConfig.DEBUG);
+            }
+
             Preference preferenceAutoPiP = findPreference("autoPiP");
             if (preferenceAutoPiP != null) {
                 preferenceAutoPiP.setEnabled(Utils.isPiPSupported(this.getContext()));

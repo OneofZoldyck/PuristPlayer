@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Purist: in-player subtitle settings panel (live preview over the video) -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/purist_sub_overlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clickable="true"
+    android:focusable="false">
+
+    <LinearLayout
+        android:id="@+id/purist_sub_panel"
+        android:layout_width="360dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:layout_margin="8dp"
+        android:background="@drawable/purist_panel_background"
+        android:clickable="true"
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="10dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/purist_subtitle_settings"
+                android:textColor="#FFFFFFFF"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/purist_sub_close"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@android:string/cancel"
+                android:src="@drawable/purist_ic_close_24dp" />
+        </LinearLayout>
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fadeScrollbars="false"
+            android:paddingEnd="8dp"
+            android:scrollbarSize="3dp">
+
+            <LinearLayout
+                android:id="@+id/purist_sub_content"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <!-- Delay -->
+                <TextView
+                    style="@style/PuristPanelHeader"
+                    android:text="@string/purist_sub_delay" />
+
+                <TextView
+                    android:id="@+id/purist_sub_delay_value"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="22sp" />
+
+                <LinearLayout
+                    android:id="@+id/purist_sub_delay_buttons"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="horizontal" />
+
+                <TextView
+                    style="@style/PuristPanelNote"
+                    android:text="@string/purist_sub_delay_note" />
+
+                <!-- Style source -->
+                <Switch
+                    android:id="@+id/purist_sub_use_system"
+                    style="@style/PuristPanelSwitch"
+                    android:text="@string/purist_sub_use_system" />
+
+                <LinearLayout
+                    android:id="@+id/purist_sub_custom_group"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/purist_sub_size_label"
+                        style="@style/PuristPanelHeader" />
+
+                    <SeekBar
+                        android:id="@+id/purist_sub_size"
+                        style="@style/PuristPanelSeekBar" />
+
+                    <TextView
+                        style="@style/PuristPanelHeader"
+                        android:text="@string/purist_sub_text_color" />
+
+                    <LinearLayout
+                        android:id="@+id/purist_sub_text_colors"
+                        style="@style/PuristPanelSwatchRow" />
+
+                    <TextView
+                        style="@style/PuristPanelHeader"
+                        android:text="@string/purist_sub_border" />
+
+                    <LinearLayout
+                        android:id="@+id/purist_sub_edge_types"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical" />
+
+                    <LinearLayout
+                        android:id="@+id/purist_sub_edge_colors"
+                        style="@style/PuristPanelSwatchRow" />
+
+                    <TextView
+                        style="@style/PuristPanelHeader"
+                        android:text="@string/purist_sub_background" />
+
+                    <LinearLayout
+                        android:id="@+id/purist_sub_bg_colors"
+                        style="@style/PuristPanelSwatchRow" />
+
+                    <TextView
+                        android:id="@+id/purist_sub_bg_opacity_label"
+                        style="@style/PuristPanelSubLabel" />
+
+                    <SeekBar
+                        android:id="@+id/purist_sub_bg_opacity"
+                        style="@style/PuristPanelSeekBar" />
+
+                    <TextView
+                        android:id="@+id/purist_sub_position_label"
+                        style="@style/PuristPanelHeader" />
+
+                    <SeekBar
+                        android:id="@+id/purist_sub_position"
+                        style="@style/PuristPanelSeekBar" />
+
+                    <Switch
+                        android:id="@+id/purist_sub_bold"
+                        style="@style/PuristPanelSwitch"
+                        android:text="@string/pref_subtitle_style_bold" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/purist_sub_embedded"
+                    style="@style/PuristPanelSwitch"
+                    android:text="@string/purist_sub_embedded_styles" />
+
+                <Switch
+                    android:id="@+id/purist_sub_embedded_sizes"
+                    style="@style/PuristPanelSwitch"
+                    android:text="@string/purist_sub_embedded_sizes" />
+
+                <TextView
+                    style="@style/PuristPanelNote"
+                    android:text="@string/purist_sub_limitations" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/purist_sub_system_settings"
+                        style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/purist_sub_system_settings"
+                        android:textColor="#FF8AB4F8" />
+
+                    <Button
+                        android:id="@+id/purist_sub_reset"
+                        style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/purist_sub_reset"
+                        android:textColor="#FF8AB4F8" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+</FrameLayout>

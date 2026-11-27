@@ -1,17 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Purist Player: rounded play triangle filled with SMPTE-style colour bars.
+     Sized to fill the adaptive-icon safe zone (66 dp circle centred in the 108 dp canvas). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24"
-    android:tint="#FFFFFF">
-    <group android:scaleX="0.493"
-        android:scaleY="0.493"
-        android:translateX="6.084"
-        android:translateY="6.084">
-        <path
-            android:fillColor="@android:color/white"
-            android:pathData="M8,5v14l11,-7z"/>
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group>
+        <clip-path android:pathData="M37,31 L37,77 Q37,82 41.32,79.48 L80.68,56.52 Q85,54 80.68,51.48 L41.32,28.52 Q37,26 37,31 Z" />
+        <path android:fillColor="#FFF2F2F2" android:pathData="M37,26h7v56h-7z" />
+        <path android:fillColor="#FFF2E600" android:pathData="M43.857,26h7v56h-7z" />
+        <path android:fillColor="#FF00D8E6" android:pathData="M50.714,26h7v56h-7z" />
+        <path android:fillColor="#FF00D23C" android:pathData="M57.571,26h7v56h-7z" />
+        <path android:fillColor="#FFE600C8" android:pathData="M64.429,26h7v56h-7z" />
+        <path android:fillColor="#FFE6141E" android:pathData="M71.286,26h7v56h-7z" />
+        <path android:fillColor="#FF1432E6" android:pathData="M78.143,26h7v56h-7z" />
     </group>
 </vector>
-

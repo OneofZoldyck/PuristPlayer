@@ -27,6 +27,8 @@ class Prefs {
     private static final String PREF_KEY_BRIGHTNESS = "brightness";
     private static final String PREF_KEY_FIRST_RUN = "firstRun";
     private static final String PREF_KEY_SUBTITLE_URI = "subtitleUri";
+    // Purist: format detected for the external subtitle file (from its real name/content)
+    private static final String PREF_KEY_SUBTITLE_MIME = "puristSubtitleMime";
 
     private static final String PREF_KEY_AUDIO_TRACK_ID = "audioTrackId";
     private static final String PREF_KEY_SUBTITLE_TRACK_ID = "subtitleTrackId";
@@ -44,8 +46,12 @@ class Prefs {
     private static final String PREF_KEY_FILE_ACCESS = "fileAccess";
     private static final String PREF_KEY_DECODER_PRIORITY = "decoderPriority";
     private static final String PREF_KEY_MAP_DV7 = "mapDV7ToHevc";
+    // Purist (debug builds only): hide Dolby Vision decoders to test fallback detection
+    static final String PREF_KEY_DEBUG_FORCE_DV_BASE_LAYER = "puristDebugForceDvBaseLayer";
     private static final String PREF_KEY_LANGUAGE_AUDIO = "languageAudio";
     private static final String PREF_KEY_SUBTITLE_STYLE_EMBEDDED = "subtitleStyleEmbedded";
+    // Purist: render ASS/SSA with libass (as authored) instead of Media3's simple text conversion
+    private static final String PREF_KEY_SUBTITLE_ASS_LIBASS = "puristSubAssLibass";
     private static final String PREF_KEY_SUBTITLE_STYLE_BOLD = "subtitleStyleBold";
 
     public static final String TRACK_DEFAULT = "default";
@@ -56,6 +62,7 @@ class Prefs {
 
     public Uri mediaUri;
     public Uri subtitleUri;
+    public String subtitleMime;
     public Uri scopeUri;
     public String mediaType;
     public int resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT;
@@ -78,11 +85,15 @@ class Prefs {
     public String fileAccess = "auto";
     public int decoderPriority = DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON;
     public boolean mapDV7ToHevc = false;
+    public boolean debugForceDvBaseLayer = false;
     public String languageAudio = TRACK_DEVICE;
     public boolean subtitleStyleEmbedded = true;
+    public boolean subtitleAssLibass = true;
     public boolean subtitleStyleBold = false;
 
     private LinkedHashMap positions;
+    // Purist: subtitle delay (ms) per media URI, persisted like positions
+    private LinkedHashMap subtitleDelays;
 
     public boolean persistentMode = true;
     public long nonPersitentPosition = -1L;
@@ -92,6 +103,45 @@ class Prefs {
         mSharedPreferences = PreferenceManager.getDefaultSharedPreferences(context);
         loadSavedPreferences();
         loadPositions();
+        subtitleDelays = loadMap("subtitle_delays");
+    }
+
+    /** Purist: subtitle delay for the current media in ms (0 if never set). */
+    public long getSubtitleDelayMs() {
+        if (mediaUri == null || !persistentMode) return 0L;
+        Object val = subtitleDelays.get(mediaUri.toString());
+        return val instanceof Long ? (Long) val : 0L;
+    }
+
+    public void updateSubtitleDelayMs(long delayMs) {
+        if (mediaUri == null || !persistentMode) return;
+        String key = mediaUri.toString();
+        if (delayMs == 0L) {
+            subtitleDelays.remove(key);
+        } else {
+            subtitleDelays.remove(key); // re-insert to keep LRU order
+            while (subtitleDelays.size() >= 100) {
+                subtitleDelays.remove(subtitleDelays.keySet().iterator().next());
+            }
+            subtitleDelays.put(key, delayMs);
+        }
+        saveMap("subtitle_delays", subtitleDelays);
+    }
+
+    private LinkedHashMap loadMap(String fileName) {
+        try (FileInputStream fis = mContext.openFileInput(fileName); ObjectInputStream is = new ObjectInputStream(fis)) {
+            return (LinkedHashMap) is.readObject();
+        } catch (Exception e) {
+            return new LinkedHashMap(10);
+        }
+    }
+
+    private void saveMap(String fileName, LinkedHashMap map) {
+        try (FileOutputStream fos = mContext.openFileOutput(fileName, Context.MODE_PRIVATE); ObjectOutputStream os = new ObjectOutputStream(fos)) {
+            os.writeObject(map);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private void loadSavedPreferences() {
@@ -103,6 +153,7 @@ class Prefs {
         firstRun = mSharedPreferences.getBoolean(PREF_KEY_FIRST_RUN, firstRun);
         if (mSharedPreferences.contains(PREF_KEY_SUBTITLE_URI))
             subtitleUri = Uri.parse(mSharedPreferences.getString(PREF_KEY_SUBTITLE_URI, null));
+        subtitleMime = mSharedPreferences.getString(PREF_KEY_SUBTITLE_MIME, null);
         if (mSharedPreferences.contains(PREF_KEY_AUDIO_TRACK_ID))
             audioTrackId = mSharedPreferences.getString(PREF_KEY_AUDIO_TRACK_ID, audioTrackId);
         if (mSharedPreferences.contains(PREF_KEY_SUBTITLE_TRACK_ID))
@@ -127,8 +178,10 @@ class Prefs {
         fileAccess = mSharedPreferences.getString(PREF_KEY_FILE_ACCESS, fileAccess);
         decoderPriority = Integer.parseInt(mSharedPreferences.getString(PREF_KEY_DECODER_PRIORITY, String.valueOf(decoderPriority)));
         mapDV7ToHevc = mSharedPreferences.getBoolean(PREF_KEY_MAP_DV7, mapDV7ToHevc);
+        debugForceDvBaseLayer = BuildConfig.DEBUG && mSharedPreferences.getBoolean(PREF_KEY_DEBUG_FORCE_DV_BASE_LAYER, false);
         languageAudio = mSharedPreferences.getString(PREF_KEY_LANGUAGE_AUDIO, languageAudio);
         subtitleStyleEmbedded = mSharedPreferences.getBoolean(PREF_KEY_SUBTITLE_STYLE_EMBEDDED, subtitleStyleEmbedded);
+        subtitleAssLibass = mSharedPreferences.getBoolean(PREF_KEY_SUBTITLE_ASS_LIBASS, subtitleAssLibass);
         subtitleStyleBold = mSharedPreferences.getBoolean(PREF_KEY_SUBTITLE_STYLE_BOLD, subtitleStyleBold);
     }
 
@@ -163,10 +216,20 @@ class Prefs {
     }
 
     public void updateSubtitle(final Uri uri) {
+        updateSubtitle(uri, null);
+    }
+
+    /** @param mime detected subtitle format, or null to fall back to extension-based detection */
+    public void updateSubtitle(final Uri uri, final String mime) {
         subtitleUri = uri;
+        subtitleMime = uri != null ? mime : null;
         subtitleTrackId = null;
         if (persistentMode) {
             final SharedPreferences.Editor sharedPreferencesEditor = mSharedPreferences.edit();
+            if (subtitleMime == null)
+                sharedPreferencesEditor.remove(PREF_KEY_SUBTITLE_MIME);
+            else
+                sharedPreferencesEditor.putString(PREF_KEY_SUBTITLE_MIME, subtitleMime);
             if (uri == null)
                 sharedPreferencesEditor.remove(PREF_KEY_SUBTITLE_URI);
             else

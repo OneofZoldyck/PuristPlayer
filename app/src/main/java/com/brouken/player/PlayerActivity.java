@@ -37,8 +37,10 @@ import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Base64;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.util.Rational;
 import android.util.TypedValue;
+import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -75,8 +77,10 @@ import androidx.media3.common.TrackGroup;
 import androidx.media3.common.TrackSelectionOverride;
 import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.Tracks;
+import androidx.media3.common.text.Cue;
+import androidx.media3.common.text.CueGroup;
 import androidx.media3.datasource.DefaultHttpDataSource;
-import androidx.media3.exoplayer.DefaultRenderersFactory;
+import androidx.media3.exoplayer.DecoderCounters;
 import androidx.media3.exoplayer.ExoPlaybackException;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.RenderersFactory;
@@ -208,6 +212,32 @@ public class PlayerActivity extends Activity {
     DisplayManager displayManager;
     DisplayManager.DisplayListener displayListener;
     SubtitleFinder subtitleFinder;
+
+    // Purist: format detection, badge and gear popup
+    private static final String PURIST_TAG = "Purist";
+    private static final long AUTO_BADGE_SETTLE_MS = 800;
+    private static final long RECHECK_SAMPLE_MS = 700;
+    private PuristRenderersFactory puristRenderersFactory;
+    private LibassSupport libass;
+    /** Purist: subtitle size setting relative to authored size, for libass and image subtitles. */
+    private float subtitleRelativeScale = 1f;
+    private FormatBadgeController formatBadge;
+    private PlayerSettingsPopup settingsPopup;
+    @androidx.annotation.Nullable private VideoFormatInfo videoFormatInfo;
+    @androidx.annotation.Nullable private Uri badgeShownForUri;
+    private boolean badgeFirstFrameRendered;
+    private int autoBadgeRetries;
+    private final Runnable autoBadgeRunnable = this::showAutoBadge;
+
+    // Purist: subtitle delay + settings panel
+    private static final long SUBTITLE_DELAY_LIMIT_MS = 10 * 60 * 1000;
+    private static final long SUBTITLE_REFRESH_DEBOUNCE_MS = 500;
+    private final SubtitleDelay subtitleDelay = new SubtitleDelay();
+    private long subtitleDelayAtLastRefreshMs;
+    private final Runnable subtitleRefreshRunnable = this::refreshSubtitlesAfterDelayChange;
+    private SubtitleSettingsPanel subtitlePanel;
+    private boolean currentCuesEmpty = true;
+    private boolean subtitlePreviewActive;
 
     Runnable barsHider = () -> {
         if (playerView != null && !controllerVisible) {
@@ -606,9 +636,78 @@ public class PlayerActivity extends Activity {
             return true;
         });
 
+        // Purist: format badge + our own gear popup (Media3's can't be extended)
+        formatBadge = new FormatBadgeController(playerView);
+        settingsPopup = new PlayerSettingsPopup(this, controlView, exoSettings, new PlayerSettingsPopup.Actions() {
+            @Override
+            public void onRecheckVideoFormat() {
+                recheckVideoFormat();
+            }
+
+            @androidx.annotation.Nullable
+            @Override
+            public Runnable subtitleSettingsAction() {
+                return () -> showSubtitlePanel();
+            }
+
+            @Override
+            public void onPopupShown() {
+                playerView.setControllerShowTimeoutMs(-1);
+            }
+
+            @Override
+            public void onPopupDismissed() {
+                resetHideCallbacks();
+            }
+        });
+        exoSettings.setOnClickListener(view -> settingsPopup.show());
+
+        subtitlePanel = new SubtitleSettingsPanel(this, playerView, new SubtitleSettingsPanel.Host() {
+            @Override
+            public android.content.SharedPreferences preferences() {
+                return mPrefs.mSharedPreferences;
+            }
+
+            @Override
+            public void onSubtitleStyleChanged() {
+                mPrefs.loadUserPreferences();
+                updateSubtitleStyle(PlayerActivity.this);
+                refreshSubtitlePreview();
+            }
+
+            @Override
+            public long getSubtitleDelayMs() {
+                return subtitleDelay.getMs();
+            }
+
+            @Override
+            public void setSubtitleDelayMs(long delayMs) {
+                PlayerActivity.this.setSubtitleDelayMs(delayMs);
+            }
+
+            @Override
+            public void openSystemCaptionSettings() {
+                subtitlePanel.hide();
+                enableRotation();
+                safelyStartActivityForResult(new Intent(Settings.ACTION_CAPTIONING_SETTINGS), REQUEST_SYSTEM_CAPTIONS);
+            }
+
+            @Override
+            public void onSubtitlePanelVisibilityChanged(boolean visible) {
+                if (visible) {
+                    playerView.hideController();
+                    if (formatBadge != null) formatBadge.hideNow();
+                    playerView.post(() -> applySubtitleAreaForPanel(true)); // after the card is laid out
+                } else {
+                    applySubtitleAreaForPanel(false);
+                }
+                refreshSubtitlePreview();
+            }
+        });
+
+        // Purist: CC long-press opens the subtitle settings panel (system caption settings are linked from it)
         exoSubtitle.setOnLongClickListener(v -> {
-            enableRotation();
-            safelyStartActivityForResult(new Intent(Settings.ACTION_CAPTIONING_SETTINGS), REQUEST_SYSTEM_CAPTIONS);
+            showSubtitlePanel();
             return true;
         });
 
@@ -731,6 +830,88 @@ public class PlayerActivity extends Activity {
         }
         initializePlayer();
         updateButtonRotation();
+        registerDebugReceiver();
+    }
+
+    // Purist: debug builds only — lets adb drive features for automated testing:
+    //   adb shell am broadcast -a com.brouken.player.purist.DEBUG_RECHECK
+    //   adb shell am broadcast -a com.brouken.player.purist.DEBUG_SUB_PANEL
+    //   adb shell am broadcast -a com.brouken.player.purist.DEBUG_SUB_DELAY --el delay_ms 1500
+    private BroadcastReceiver debugReceiver;
+
+    private void registerDebugReceiver() {
+        if (!BuildConfig.DEBUG || debugReceiver != null) return;
+        debugReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                String action = intent.getAction();
+                if ("com.brouken.player.purist.DEBUG_SUB_PANEL".equals(action)) {
+                    showSubtitlePanel();
+                } else if ("com.brouken.player.purist.DEBUG_SUB_DELAY".equals(action)) {
+                    setSubtitleDelayMs(intent.getLongExtra("delay_ms", 0));
+                } else if ("com.brouken.player.purist.DEBUG_SELECT_TEXT".equals(action)) {
+                    if (player != null) {
+                        int wanted = intent.getIntExtra("index", 0), n = 0;
+                        for (Tracks.Group g : player.getCurrentTracks().getGroups()) {
+                            if (g.getType() == C.TRACK_TYPE_TEXT && n++ == wanted) {
+                                player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                        .setOverrideForType(new TrackSelectionOverride(g.getMediaTrackGroup(), 0))
+                                        .build());
+                            }
+                        }
+                    }
+                } else if ("com.brouken.player.purist.DEBUG_SEEK".equals(action)) {
+                    if (player != null) {
+                        player.setSeekParameters(SeekParameters.EXACT);
+                        player.seekTo(intent.getLongExtra("pos_ms", 0));
+                        if (intent.getBooleanExtra("pause", false)) {
+                            player.pause();
+                        } else {
+                            player.play();
+                        }
+                    }
+                } else if ("com.brouken.player.purist.DEBUG_SUB_SIZE".equals(action)) {
+                    mPrefs.mSharedPreferences.edit().putString(SubtitleStyleConfig.KEY_SOURCE, "custom")
+                            .putInt(SubtitleStyleConfig.KEY_SIZE, intent.getIntExtra("size", 100)).apply();
+                    updateSubtitleStyle(PlayerActivity.this);
+                } else if ("com.brouken.player.purist.DEBUG_TRACKS".equals(action)) {
+                    if (player != null) {
+                        for (Tracks.Group g : player.getCurrentTracks().getGroups()) {
+                            Format f = g.getMediaTrackGroup().getFormat(0);
+                            Log.i(PURIST_TAG, "track type=" + g.getType() + " selected=" + g.isSelected() + " id=" + f.id
+                                    + " mime=" + f.sampleMimeType + " codecs=" + f.codecs + " lang=" + f.language
+                                    + " label=" + f.label + " flags=" + f.selectionFlags);
+                        }
+                        androidx.media3.exoplayer.DecoderCounters c = player.getVideoDecoderCounters();
+                        if (c != null) {
+                            c.ensureUpdated();
+                            Log.i(PURIST_TAG, "video counters rendered=" + c.renderedOutputBufferCount
+                                    + " dropped=" + c.droppedBufferCount + " skipped=" + c.skippedOutputBufferCount
+                                    + " maxConsecutiveDropped=" + c.maxConsecutiveDroppedBufferCount
+                                    + " libass=" + (libass != null) + " pos=" + player.getCurrentPosition());
+                        }
+                    }
+                } else {
+                    recheckVideoFormat();
+                }
+            }
+        };
+        IntentFilter filter = new IntentFilter("com.brouken.player.purist.DEBUG_RECHECK");
+        filter.addAction("com.brouken.player.purist.DEBUG_SUB_PANEL");
+        filter.addAction("com.brouken.player.purist.DEBUG_SUB_DELAY");
+        filter.addAction("com.brouken.player.purist.DEBUG_TRACKS");
+        filter.addAction("com.brouken.player.purist.DEBUG_SUB_SIZE");
+        filter.addAction("com.brouken.player.purist.DEBUG_SELECT_TEXT");
+        filter.addAction("com.brouken.player.purist.DEBUG_SEEK");
+        ContextCompat.registerReceiver(this, debugReceiver, filter, ContextCompat.RECEIVER_EXPORTED);
+    }
+
+    private void unregisterDebugReceiver() {
+        if (debugReceiver != null) {
+            unregisterReceiver(debugReceiver);
+            debugReceiver = null;
+        }
     }
 
     @Override
@@ -751,6 +932,7 @@ public class PlayerActivity extends Activity {
     @Override
     public void onStop() {
         super.onStop();
+        unregisterDebugReceiver();
         alive = false;
         if (Build.VERSION.SDK_INT >= 31) {
             playerView.removeCallbacks(barsHider);
@@ -762,6 +944,10 @@ public class PlayerActivity extends Activity {
     @SuppressLint("GestureBackNavigation")
     @Override
     public void onBackPressed() {
+        if (subtitlePanel != null && subtitlePanel.isShowing()) {
+            subtitlePanel.hide(); // API < 33 (newer versions use the panel's OnBackInvokedCallback)
+            return;
+        }
         restorePlayStateAllowed = false;
         super.onBackPressed();
     }
@@ -795,6 +981,7 @@ public class PlayerActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        badgeShownForUri = null; // a newly opened file (even the same one) gets its own format badge
 
         if (intent != null) {
             final String action = intent.getAction();
@@ -1025,6 +1212,15 @@ public class PlayerActivity extends Activity {
         if (isInPictureInPictureMode) {
             // On Android TV it is required to hide controller in this PIP change callback
             playerView.hideController();
+            if (formatBadge != null) {
+                formatBadge.hideNow();
+            }
+            if (settingsPopup != null) {
+                settingsPopup.dismiss();
+            }
+            if (subtitlePanel != null) {
+                subtitlePanel.hide();
+            }
             setSubtitleTextSizePiP();
             playerView.setScale(1.f);
             mReceiver = new BroadcastReceiver() {
@@ -1131,17 +1327,32 @@ public class PlayerActivity extends Activity {
             }
         } else if (requestCode == REQUEST_CHOOSER_SUBTITLE || requestCode == REQUEST_CHOOSER_SUBTITLE_MEDIASTORE) {
             if (resultCode == RESULT_OK) {
-                Uri uri = data.getData();
+                // Purist: several files can be picked at once (VobSub .idx + .sub)
+                final ArrayList<Uri> uris = new ArrayList<>();
+                if (data.getClipData() != null) {
+                    for (int i = 0; i < data.getClipData().getItemCount(); i++) {
+                        Uri u = data.getClipData().getItemAt(i).getUri();
+                        if (u != null && !uris.contains(u)) uris.add(u);
+                    }
+                }
+                if (data.getData() != null && !uris.contains(data.getData())) {
+                    uris.add(0, data.getData());
+                }
+                if (uris.isEmpty()) {
+                    return;
+                }
 
                 if (requestCode == REQUEST_CHOOSER_SUBTITLE) {
-                    try {
-                        getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    } catch (SecurityException e) {
-                        e.printStackTrace();
+                    for (Uri u : uris) {
+                        try {
+                            getContentResolver().takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        } catch (SecurityException e) {
+                            e.printStackTrace();
+                        }
                     }
                 }
 
-                handleSubtitles(uri);
+                handlePickedSubtitles(uris);
             }
         } else if (requestCode == REQUEST_CHOOSER_SCOPE_DIR) {
             if (resultCode == RESULT_OK) {
@@ -1170,10 +1381,33 @@ public class PlayerActivity extends Activity {
     }
 
     private void handleSubtitles(Uri uri) {
-        // Convert subtitles to UTF-8 if necessary
+        handleSubtitles(uri, true);
+    }
+
+    /** @param interactive false for automatically found subtitles: never opens a picker */
+    private void handleSubtitles(Uri uri, boolean interactive) {
+        // Purist: detect the real format first (content:// URIs have no extension), on the original file
+        String mime = null;
+        String displayName = null;
+        String scheme = uri.getScheme();
+        if (scheme == null || !scheme.toLowerCase().startsWith("http")) {
+            com.brouken.player.subtitle.SubtitleFormatDetector.Result detected =
+                    com.brouken.player.subtitle.SubtitleFormatDetector.detect(this, uri);
+            if (detected == null) {
+                Toast.makeText(this, R.string.purist_sub_unsupported, Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (detected.binary) {
+                handleBitmapSubtitle(uri, detected, interactive);
+                return;
+            }
+            mime = detected.mime;
+            displayName = detected.displayName;
+        }
+        // Convert text subtitles to UTF-8 if necessary
         SubtitleUtils.clearCache(this);
-        uri = Utils.convertToUTF(this, uri);
-        mPrefs.updateSubtitle(uri);
+        uri = Utils.convertToUTF(this, uri, displayName);
+        mPrefs.updateSubtitle(uri, mime);
     }
 
     public void initializePlayer() {
@@ -1225,12 +1459,43 @@ public class PlayerActivity extends Activity {
                 .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
                 .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE);
         MediaCodecUtil.setMapDV7ToHevc(mPrefs.mapDV7ToHevc);
-        @SuppressLint("WrongConstant") RenderersFactory renderersFactory = new DefaultRenderersFactory(this)
+        // Purist: inspecting video renderer reports what the codec is actually configured with
+        if (puristRenderersFactory != null) {
+            puristRenderersFactory.release();
+        }
+        videoFormatInfo = null;
+        badgeFirstFrameRendered = false;
+        playerView.removeCallbacks(autoBadgeRunnable);
+        if (formatBadge != null) {
+            formatBadge.hideNow();
+        }
+        subtitleDelay.setMs(mPrefs.getSubtitleDelayMs()); // per-video delay
+        subtitleDelayAtLastRefreshMs = subtitleDelay.getMs();
+        playerView.removeCallbacks(subtitleRefreshRunnable);
+        puristRenderersFactory = new PuristRenderersFactory(this, this::onVideoFormatInfo, subtitleDelay,
+                BuildConfig.DEBUG && mPrefs.debugForceDvBaseLayer);
+        puristRenderersFactory.setSubtitleScale(subtitleRelativeScale);
+        @SuppressLint("WrongConstant") RenderersFactory renderersFactory = puristRenderersFactory
                 .setExtensionRendererMode(mPrefs.decoderPriority);
 
+        // Purist: extra subtitle formats (SAMI, MicroDVD, MPL2, SubViewer/SBV, TMPlayer) for external files
+        final com.brouken.player.subtitle.PuristSubtitleParserFactory subtitleParserFactory =
+                new com.brouken.player.subtitle.PuristSubtitleParserFactory(this, mPrefs.mediaUri);
+        // Purist: libass for ASS/SSA (overlay above the video; the video path is untouched)
+        releaseLibass();
+        androidx.media3.extractor.ExtractorsFactory mediaExtractorsFactory = extractorsFactory;
+        if (mPrefs.subtitleAssLibass) {
+            libass = new LibassSupport(this);
+            libass.setFontScale(subtitleRelativeScale);
+            subtitleParserFactory.setAssFactory(libass.parserFactory());
+            puristRenderersFactory.setLibass(libass);
+            mediaExtractorsFactory = libass.wrapExtractors(extractorsFactory);
+        }
         ExoPlayer.Builder playerBuilder = new ExoPlayer.Builder(this, renderersFactory)
                 .setTrackSelector(trackSelector)
-                .setMediaSourceFactory(new DefaultMediaSourceFactory(this, extractorsFactory));
+                .setMediaSourceFactory(new com.brouken.player.subtitle.BitmapSubtitleMediaSourceFactory(this,
+                        new DefaultMediaSourceFactory(this, mediaExtractorsFactory)
+                                .setSubtitleParserFactory(subtitleParserFactory)));
 
         if (haveMedia && isNetworkUri) {
             if (mPrefs.mediaUri.getScheme().toLowerCase().startsWith("http")) {
@@ -1240,12 +1505,17 @@ public class PlayerActivity extends Activity {
                     headers.put("Authorization", "Basic " + Base64.encodeToString(userInfo.getBytes(), Base64.NO_WRAP));
                     DefaultHttpDataSource.Factory defaultHttpDataSourceFactory = new DefaultHttpDataSource.Factory();
                     defaultHttpDataSourceFactory.setDefaultRequestProperties(headers);
-                    playerBuilder.setMediaSourceFactory(new DefaultMediaSourceFactory(defaultHttpDataSourceFactory, extractorsFactory));
+                    playerBuilder.setMediaSourceFactory(new com.brouken.player.subtitle.BitmapSubtitleMediaSourceFactory(this,
+                            new DefaultMediaSourceFactory(defaultHttpDataSourceFactory, mediaExtractorsFactory)
+                                    .setSubtitleParserFactory(subtitleParserFactory)));
                 }
             }
         }
 
         player = playerBuilder.build();
+        if (libass != null) {
+            libass.attach(player, playerView);
+        }
 
         AudioAttributes audioAttributes = new AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -1312,7 +1582,9 @@ public class PlayerActivity extends Activity {
             if (apiAccess && apiSubs.size() > 0) {
                 mediaItemBuilder.setSubtitleConfigurations(apiSubs);
             } else if (mPrefs.subtitleUri != null && Utils.fileExists(this, mPrefs.subtitleUri)) {
-                MediaItem.SubtitleConfiguration subtitle = SubtitleUtils.buildSubtitle(this, mPrefs.subtitleUri, null, true);
+                // Purist: detected format + stable id (used to select the track, see getTrackGroupFromFormatId)
+                MediaItem.SubtitleConfiguration subtitle = SubtitleUtils.buildSubtitle(this, mPrefs.subtitleUri, null, true,
+                        mPrefs.subtitleMime, SubtitleUtils.SIDECAR_ID);
                 mediaItemBuilder.setSubtitleConfigurations(Collections.singletonList(subtitle));
             }
             player.setMediaItem(mediaItemBuilder.build(), mPrefs.getPosition());
@@ -1422,8 +1694,260 @@ public class PlayerActivity extends Activity {
             player.release();
             player = null;
         }
+        releaseLibass();
+        playerView.removeCallbacks(autoBadgeRunnable);
+        if (puristRenderersFactory != null) {
+            puristRenderersFactory.release();
+        }
+        if (formatBadge != null) {
+            formatBadge.hideNow();
+        }
+        if (settingsPopup != null) {
+            settingsPopup.dismiss();
+        }
         titleView.setVisibility(View.GONE);
         updateButtons(false);
+    }
+
+    // ---- Purist: standalone bitmap subtitles (PGS .sup, VobSub .idx + .sub) ----
+
+    /** First half of a VobSub pair whose partner the user is asked to pick. */
+    private Uri pendingVobSubUri;
+    private boolean pendingVobSubIsIdx;
+
+    private void handlePickedSubtitles(java.util.List<Uri> uris) {
+        if (uris.size() > 1) {
+            Uri idx = null;
+            Uri sub = null;
+            for (Uri u : uris) {
+                com.brouken.player.subtitle.SubtitleFormatDetector.Result r =
+                        com.brouken.player.subtitle.SubtitleFormatDetector.detect(this, u);
+                if (r == null) continue;
+                if (com.brouken.player.subtitle.SubtitleMimes.APPLICATION_VOBSUB_IDX.equals(r.mime)) idx = u;
+                else if (com.brouken.player.subtitle.SubtitleMimes.APPLICATION_VOBSUB_SUB.equals(r.mime)) sub = u;
+            }
+            if (idx != null && sub != null) {
+                pendingVobSubUri = null;
+                pairVobSub(idx, sub);
+                return;
+            }
+        }
+        handleSubtitles(uris.get(0));
+    }
+
+    private void handleBitmapSubtitle(Uri uri, com.brouken.player.subtitle.SubtitleFormatDetector.Result detected,
+                                      boolean interactive) {
+        if (com.brouken.player.subtitle.SubtitleMimes.APPLICATION_PGS_SUP.equals(detected.mime)) {
+            pendingVobSubUri = null;
+            mPrefs.updateSubtitle(uri, detected.mime);
+            return;
+        }
+        final boolean isIdx = com.brouken.player.subtitle.SubtitleMimes.APPLICATION_VOBSUB_IDX.equals(detected.mime);
+        Uri partner = null;
+        if (pendingVobSubUri != null && pendingVobSubIsIdx != isIdx) {
+            partner = pendingVobSubUri;
+        }
+        pendingVobSubUri = null;
+        if (partner == null) {
+            partner = com.brouken.player.subtitle.VobSubPairing.findPartner(this, uri, detected.displayName,
+                    isIdx ? "sub" : "idx", mPrefs.scopeUri);
+        }
+        if (partner == null) {
+            if (!interactive) {
+                return;
+            }
+            pendingVobSubUri = uri;
+            pendingVobSubIsIdx = isIdx;
+            Toast.makeText(this, isIdx ? R.string.purist_sub_vobsub_pick_sub : R.string.purist_sub_vobsub_pick_idx,
+                    Toast.LENGTH_LONG).show();
+            loadSubtitleFile(uri);
+            return;
+        }
+        pairVobSub(isIdx ? uri : partner, isIdx ? partner : uri);
+    }
+
+    private void pairVobSub(Uri idxUri, Uri subUri) {
+        try {
+            com.brouken.player.subtitle.VobSubIndex.store(this, idxUri, subUri);
+            mPrefs.updateSubtitle(subUri, com.brouken.player.subtitle.SubtitleMimes.APPLICATION_VOBSUB_SUB);
+        } catch (java.io.IOException e) {
+            Log.w(PURIST_TAG, "VobSub pairing failed", e);
+            Toast.makeText(this, R.string.purist_sub_unsupported, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    // ---- Purist: format detection, badge, recheck ----
+
+    private void releaseLibass() {
+        if (libass != null) {
+            libass.release();
+            libass = null;
+        }
+    }
+
+    private void onVideoFormatInfo(VideoFormatInfo info) {
+        videoFormatInfo = info;
+        Log.i(PURIST_TAG, "video format: " + info.kindLabel() + " codecMime=" + info.codecMime + " codec=" + info.codecName
+                + " dvFallback=" + info.dolbyVisionFallback + " dvProfile=" + info.dvProfileLabel
+                + " hdr10Plus=" + info.hdr10PlusSeen + " dvRpu=" + info.dvRpuSeen + " active=" + info.codecActive
+                + " track=" + (info.trackFormat != null ? info.trackFormat.sampleMimeType + "/" + info.trackFormat.codecs : "null"));
+        if (formatBadge != null) {
+            formatBadge.onVideoInfo(info);
+        }
+    }
+
+    /** Auto badge: once per media URI, a moment after playback with a rendered first frame starts. */
+    private void maybeScheduleAutoBadge() {
+        if (!badgeFirstFrameRendered || player == null || !player.isPlaying() || mPrefs.mediaUri == null) return;
+        if (mPrefs.mediaUri.equals(badgeShownForUri)) return;
+        badgeShownForUri = mPrefs.mediaUri;
+        autoBadgeRetries = 0;
+        playerView.removeCallbacks(autoBadgeRunnable);
+        playerView.postDelayed(autoBadgeRunnable, AUTO_BADGE_SETTLE_MS);
+    }
+
+    private void showAutoBadge() {
+        if (formatBadge == null || player == null || isInPictureInPictureModeCompat()) return;
+        VideoFormatInfo info = videoFormatInfo;
+        if (info == null) {
+            // Decoder not configured yet (or audio-only media): retry briefly, then give up silently.
+            if (++autoBadgeRetries <= 5) playerView.postDelayed(autoBadgeRunnable, 500);
+            return;
+        }
+        formatBadge.show(info, null);
+    }
+
+    /** Gear menu "Recheck video format": re-verify decoder, frames and display state, then show logo + detail. */
+    void recheckVideoFormat() {
+        playerView.hideController();
+        if (player == null || formatBadge == null) return;
+        if (videoFormatInfo == null) {
+            Utils.showText(playerView, getString(R.string.purist_format_unavailable), 2500);
+            return;
+        }
+        final long framesBefore = renderedVideoFrames();
+        final boolean wasPlaying = player.isPlaying();
+        playerView.postDelayed(() -> {
+            if (player == null || videoFormatInfo == null) return;
+            Boolean advancing = null;
+            if (wasPlaying && player.isPlaying() && framesBefore >= 0) {
+                advancing = renderedVideoFrames() > framesBefore;
+            }
+            final Boolean framesAdvancing = advancing;
+            final float hdrSdrRatio = currentHdrSdrRatio();
+            // Panel luminance needs a getprop call and a file read: sample it off the main thread.
+            new Thread(() -> {
+                final int nits = PanelLuminance.estimateNits();
+                playerView.post(() -> {
+                    VideoFormatInfo info = videoFormatInfo;
+                    if (player == null || info == null || formatBadge == null) return;
+                    String detail = info.detailLine(nits, hdrSdrRatio, framesAdvancing);
+                    Format selected = player.getVideoFormat();
+                    if (selected != null && info.trackFormat != null && selected.id != null && info.trackFormat.id != null
+                            && !selected.id.equals(info.trackFormat.id)) {
+                        detail += " · " + getString(R.string.purist_track_mismatch);
+                    }
+                    Log.i(PURIST_TAG, "recheck: " + detail);
+                    formatBadge.show(info, detail);
+                });
+            }, "purist-luminance").start();
+        }, RECHECK_SAMPLE_MS);
+    }
+
+    private long renderedVideoFrames() {
+        if (player == null) return -1;
+        DecoderCounters counters = player.getVideoDecoderCounters();
+        if (counters == null) return -1;
+        counters.ensureUpdated();
+        return counters.renderedOutputBufferCount;
+    }
+
+    private float currentHdrSdrRatio() {
+        if (Build.VERSION.SDK_INT >= 34) {
+            Display display = playerView.getDisplay();
+            if (display != null && display.isHdrSdrRatioAvailable()) {
+                return display.getHdrSdrRatio();
+            }
+        }
+        return Float.NaN;
+    }
+
+    private boolean isInPictureInPictureModeCompat() {
+        return Build.VERSION.SDK_INT >= 24 && isInPictureInPictureMode();
+    }
+
+    // ---- Purist: subtitle delay + panel ----
+
+    void showSubtitlePanel() {
+        if (subtitlePanel != null && !isInPictureInPictureModeCompat()) {
+            subtitlePanel.show();
+        }
+    }
+
+    /** Positive = later. Applied live by SubtitleDelayRenderer; remembered per video. */
+    void setSubtitleDelayMs(long delayMs) {
+        delayMs = Math.max(-SUBTITLE_DELAY_LIMIT_MS, Math.min(SUBTITLE_DELAY_LIMIT_MS, delayMs));
+        subtitleDelay.setMs(delayMs);
+        mPrefs.updateSubtitleDelayMs(delayMs);
+        playerView.removeCallbacks(subtitleRefreshRunnable);
+        playerView.postDelayed(subtitleRefreshRunnable, SUBTITLE_REFRESH_DEBOUNCE_MS);
+    }
+
+    /**
+     * A larger delay moves the subtitle clock backwards, past cues the renderer has already consumed: re-read them
+     * with an exact seek in place. (ExoPlayer ignores a seek to the same millisecond, hence the 1 ms nudge.)
+     */
+    private void refreshSubtitlesAfterDelayChange() {
+        long now = subtitleDelay.getMs();
+        if (player != null && now > subtitleDelayAtLastRefreshMs && player.getCurrentTracks().containsType(C.TRACK_TYPE_TEXT)) {
+            SeekParameters previous = player.getSeekParameters();
+            player.setSeekParameters(SeekParameters.EXACT);
+            long position = player.getCurrentPosition();
+            player.seekTo(position > 0 ? position - 1 : 1);
+            player.setSeekParameters(previous);
+        }
+        subtitleDelayAtLastRefreshMs = now;
+    }
+
+    /**
+     * While the panel is open, confine subtitles to the area beside it (landscape) or above it (portrait) so the live
+     * preview isn't hidden under the card; on close, restore the normal (pillarbox-aware) margins.
+     */
+    private void applySubtitleAreaForPanel(boolean open) {
+        SubtitleView subtitleView = playerView.getSubtitleView();
+        if (subtitleView == null) return;
+        if (!open || subtitlePanel == null || !subtitlePanel.isShowing()) {
+            Utils.setViewParams(subtitleView, 0, 0, 0, 0, 0, 0, 0, 0);
+            updateSubtitleViewMargin();
+            return;
+        }
+        View card = subtitlePanel.card();
+        int[] cardLoc = new int[2], hostLoc = new int[2];
+        card.getLocationInWindow(cardLoc);
+        playerView.getLocationInWindow(hostLoc);
+        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) subtitleView.getLayoutParams();
+        if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            int right = Math.max(lp.rightMargin, playerView.getWidth() - (cardLoc[0] - hostLoc[0]));
+            Utils.setViewParams(subtitleView, 0, 0, 0, 0, lp.leftMargin, lp.topMargin, right, lp.bottomMargin);
+        } else {
+            int bottom = Math.max(lp.bottomMargin, playerView.getHeight() - (cardLoc[1] - hostLoc[1]));
+            Utils.setViewParams(subtitleView, 0, 0, 0, 0, lp.leftMargin, lp.topMargin, lp.rightMargin, bottom);
+        }
+    }
+
+    /** While the panel is open and no real cue is on screen, show a sample line so style changes are visible. */
+    private void refreshSubtitlePreview() {
+        SubtitleView subtitleView = playerView.getSubtitleView();
+        if (subtitleView == null) return;
+        boolean panelOpen = subtitlePanel != null && subtitlePanel.isShowing();
+        if (panelOpen && currentCuesEmpty) {
+            subtitleView.setCues(Collections.singletonList(
+                    new Cue.Builder().setText(getString(R.string.purist_sub_preview)).build()));
+            subtitlePreviewActive = true;
+        } else if (subtitlePreviewActive && currentCuesEmpty) {
+            subtitleView.setCues(Collections.emptyList());
+            subtitlePreviewActive = false;
+        }
     }
 
     private class PlayerListener implements Player.Listener {
@@ -1441,8 +1965,32 @@ public class PlayerActivity extends Activity {
         }
 
         @Override
+        public void onRenderedFirstFrame() {
+            badgeFirstFrameRendered = true;
+            maybeScheduleAutoBadge();
+        }
+
+        @Override
+        public void onCues(@NonNull CueGroup cueGroup) {
+            currentCuesEmpty = cueGroup.cues.isEmpty();
+            if (BuildConfig.DEBUG && player != null) {
+                Log.d("PuristSubs", "pos=" + player.getCurrentPosition() + " delay=" + subtitleDelay.getMs() + " cues="
+                        + (currentCuesEmpty ? "[]" : String.valueOf(cueGroup.cues.get(0).text).replace('\n', ' ')));
+            }
+            if (currentCuesEmpty && subtitlePanel != null && subtitlePanel.isShowing()) {
+                // PlayerView clears the SubtitleView too; re-show the preview after it has done so.
+                playerView.post(PlayerActivity.this::refreshSubtitlePreview);
+            } else if (!currentCuesEmpty) {
+                subtitlePreviewActive = false;
+            }
+        }
+
+        @Override
         public void onIsPlayingChanged(boolean isPlaying) {
             playerView.setKeepScreenOn(isPlaying);
+            if (isPlaying) {
+                maybeScheduleAutoBadge();
+            }
 
             if (Utils.isPiPSupported(PlayerActivity.this)) {
                 if (isPlaying) {
@@ -1658,17 +2206,11 @@ public class PlayerActivity extends Activity {
 
             final Intent intent = createBaseFileIntent(Intent.ACTION_OPEN_DOCUMENT, pickerInitialUri);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
+            // Purist: allow any file. Providers report subtitle types inconsistently (.smi, .sub, .mpl, .sup...),
+            // so the content-based SubtitleFormatDetector decides instead of a MIME filter.
             intent.setType("*/*");
-
-            final String[] supportedMimeTypes = {
-                    MimeTypes.APPLICATION_SUBRIP,
-                    MimeTypes.TEXT_SSA,
-                    MimeTypes.TEXT_VTT,
-                    MimeTypes.APPLICATION_TTML,
-                    "text/*",
-                    "application/octet-stream"
-            };
-            intent.putExtra(Intent.EXTRA_MIME_TYPES, supportedMimeTypes);
+            // Purist: VobSub is two files (.idx + .sub); they can be picked together
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
 
             if (Build.VERSION.SDK_INT < 30) {
                 final ComponentName systemComponentName = Utils.getSystemComponent(this, intent);
@@ -1711,11 +2253,16 @@ public class PlayerActivity extends Activity {
         if ((id == null && trackType == C.TRACK_TYPE_AUDIO ) || player == null) {
             return null;
         }
+        // Purist: "no saved subtitle track" right after loading an external file means "select that file".
+        // Upstream matched Format.id == null for this, but Media3 now assigns ids to sideloaded tracks, so the
+        // external track was never selected (and stayed off whenever system captions are disabled).
+        final boolean selectSidecar = id == null && trackType == C.TRACK_TYPE_TEXT && mPrefs.subtitleUri != null;
         for (Tracks.Group group : player.getCurrentTracks().getGroups()) {
             if (group.getType() == trackType) {
                 final TrackGroup trackGroup = group.getMediaTrackGroup();
                 final Format format = trackGroup.getFormat(0);
-                if (Objects.equals(id, format.id)) {
+                if (selectSidecar ? (format.id != null && format.id.contains(SubtitleUtils.SIDECAR_ID)) || format.id == null
+                        : Objects.equals(id, format.id)) {
                     return trackGroup;
                 }
             }
@@ -1885,6 +2432,12 @@ public class PlayerActivity extends Activity {
     @Override
     public void onConfigurationChanged(@NonNull Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        if (subtitlePanel != null && subtitlePanel.isShowing()) {
+            playerView.post(() -> {  // after the new layout pass
+                subtitlePanel.onConfigurationChanged();
+                playerView.post(() -> applySubtitleAreaForPanel(true));
+            });
+        }
 
         if (!isInPip()) {
             setSubtitleTextSize(newConfig.orientation);
@@ -1953,21 +2506,45 @@ public class PlayerActivity extends Activity {
         final CaptioningManager captioningManager = (CaptioningManager) getSystemService(Context.CAPTIONING_SERVICE);
         final SubtitleView subtitleView = playerView.getSubtitleView();
         final boolean isTablet = Utils.isTablet(context);
-        subtitlesScale = SubtitleUtils.normalizeFontScale(captioningManager.getFontScale(), isTvBox || isTablet);
+        // Purist: "Custom" style from the subtitle panel / Settings, or the system caption style
+        final SubtitleStyleConfig config = SubtitleStyleConfig.load(mPrefs.mSharedPreferences);
+        final CaptioningManager.CaptionStyle userStyle = captioningManager.getUserStyle();
+        final CaptionStyleCompat userStyleCompat = CaptionStyleCompat.createFromCaptionStyle(userStyle);
+        final Typeface typeface = Typeface.create(userStyleCompat.typeface != null ? userStyleCompat.typeface : Typeface.DEFAULT,
+                config.bold ? Typeface.BOLD : Typeface.NORMAL);
+        if (config.useSystemStyle) {
+            subtitlesScale = SubtitleUtils.normalizeFontScale(captioningManager.getFontScale(), isTvBox || isTablet);
+        } else {
+            // 100 % = the app's default size for this device class
+            subtitlesScale = SubtitleUtils.normalizeFontScale(1.0f, isTvBox || isTablet) * config.sizePercent / 100f;
+        }
+        // Purist: the same setting scales ASS (libass) and image subtitles relative to their authored size
+        subtitleRelativeScale = config.useSystemStyle ? captioningManager.getFontScale() : config.sizePercent / 100f;
+        if (puristRenderersFactory != null) {
+            puristRenderersFactory.setSubtitleScale(subtitleRelativeScale);
+        }
+        if (libass != null) {
+            libass.setFontScale(subtitleRelativeScale);
+        }
         if (subtitleView != null) {
-            final CaptioningManager.CaptionStyle userStyle = captioningManager.getUserStyle();
-            final CaptionStyleCompat userStyleCompat = CaptionStyleCompat.createFromCaptionStyle(userStyle);
-            final CaptionStyleCompat captionStyle = new CaptionStyleCompat(
-                    userStyle.hasForegroundColor() ? userStyleCompat.foregroundColor : Color.WHITE,
-                    userStyle.hasBackgroundColor() ? userStyleCompat.backgroundColor : Color.TRANSPARENT,
-                    userStyle.hasWindowColor() ? userStyleCompat.windowColor : Color.TRANSPARENT,
-                    userStyle.hasEdgeType() ? userStyleCompat.edgeType : CaptionStyleCompat.EDGE_TYPE_OUTLINE,
-                    userStyle.hasEdgeColor() ? userStyleCompat.edgeColor : Color.BLACK,
-                    Typeface.create(userStyleCompat.typeface != null ? userStyleCompat.typeface : Typeface.DEFAULT,
-                            mPrefs.subtitleStyleBold ? Typeface.BOLD : Typeface.NORMAL));
+            final CaptionStyleCompat captionStyle;
+            if (config.useSystemStyle) {
+                captionStyle = new CaptionStyleCompat(
+                        userStyle.hasForegroundColor() ? userStyleCompat.foregroundColor : Color.WHITE,
+                        userStyle.hasBackgroundColor() ? userStyleCompat.backgroundColor : Color.TRANSPARENT,
+                        userStyle.hasWindowColor() ? userStyleCompat.windowColor : Color.TRANSPARENT,
+                        userStyle.hasEdgeType() ? userStyleCompat.edgeType : CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                        userStyle.hasEdgeColor() ? userStyleCompat.edgeColor : Color.BLACK,
+                        typeface);
+                subtitleView.setBottomPaddingFraction(SubtitleView.DEFAULT_BOTTOM_PADDING_FRACTION * 2f / 3f);
+            } else {
+                captionStyle = new CaptionStyleCompat(config.textColor, config.backgroundArgb(), Color.TRANSPARENT,
+                        config.edgeType, config.edgeColor, typeface);
+                subtitleView.setBottomPaddingFraction(config.positionPercent / 100f);
+            }
             subtitleView.setStyle(captionStyle);
-            subtitleView.setApplyEmbeddedStyles(mPrefs.subtitleStyleEmbedded);
-            subtitleView.setBottomPaddingFraction(SubtitleView.DEFAULT_BOTTOM_PADDING_FRACTION * 2f / 3f);
+            subtitleView.setApplyEmbeddedStyles(config.applyEmbeddedStyles);
+            subtitleView.setApplyEmbeddedFontSizes(config.applyEmbeddedFontSizes);
         }
         setSubtitleTextSize();
     }
@@ -2018,7 +2595,7 @@ public class PlayerActivity extends Activity {
                 }
 
                 if (subtitle != null) {
-                    handleSubtitles(subtitle.getUri());
+                    handleSubtitles(subtitle.getUri(), false);
                 }
             }
         }

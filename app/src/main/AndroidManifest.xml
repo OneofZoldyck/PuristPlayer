@@ -101,6 +101,11 @@
                 <data android:mimeType="text/vtt" />
                 <data android:mimeType="application/vtt" /> <!-- .vtt & X-plore -->
                 <data android:mimeType="application/ttml+xml" />
+                <!-- Purist: more subtitle formats -->
+                <data android:mimeType="application/x-sami" />
+                <data android:mimeType="text/x-microdvd" />
+                <data android:mimeType="text/x-mpl2" />
+                <data android:mimeType="text/x-subviewer" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

@@ -97,7 +97,15 @@ class CustomDefaultTrackNameProvider extends DefaultTrackNameProvider {
                 return "TX3G";
             case MimeTypes.APPLICATION_DVBSUBS:
                 return "DVB";
+            // Purist: more subtitle formats
+            case MimeTypes.APPLICATION_VOBSUB:
+                return "VobSub";
+            case MimeTypes.APPLICATION_CEA608:
+            case MimeTypes.APPLICATION_MP4CEA608:
+                return "CEA-608";
+            case MimeTypes.APPLICATION_CEA708:
+                return "CEA-708";
         }
-        return null;
+        return com.brouken.player.subtitle.SubtitleMimes.displayName(mimeType);
     }
 }

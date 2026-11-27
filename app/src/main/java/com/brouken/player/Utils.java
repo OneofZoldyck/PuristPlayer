@@ -74,7 +74,11 @@ class Utils {
     public static final String FEATURE_FIRE_TV = "amazon.hardware.fire_tv";
 
     public static final String[] supportedExtensionsVideo = new String[] { "3gp", "m4v", "mkv", "mov", "mp4", "ts", "webm" };
-    public static final String[] supportedExtensionsSubtitle = new String[] { "srt", "ssa", "ass", "vtt", "ttml", "dfxp", "xml" };
+    public static final String[] supportedExtensionsSubtitle = new String[] { "srt", "ssa", "ass", "vtt", "ttml", "dfxp", "xml",
+            // Purist: more formats (.txt is accepted too when picked explicitly; its content decides)
+            "smi", "sami", "sub", "mpl", "sbv", "webvtt",
+            // Purist: image subtitles (PGS, VobSub index)
+            "sup", "idx" };
 
     public static final String[] supportedMimeTypesVideo = new String[] {
             // Local mime types on Android:
@@ -636,6 +640,11 @@ class Utils {
     }
 
     public static Uri convertToUTF(PlayerActivity activity, Uri subtitleUri) {
+        return convertToUTF(activity, subtitleUri, null);
+    }
+
+    /** @param displayName real file name (keeps the extension on the converted cache copy), or null */
+    public static Uri convertToUTF(PlayerActivity activity, Uri subtitleUri, String displayName) {
         try {
             String scheme = subtitleUri.getScheme();
             if (scheme != null && scheme.toLowerCase().startsWith("http")) {
@@ -646,7 +655,7 @@ class Utils {
                 return null;
             } else {
                 InputStream inputStream = activity.getContentResolver().openInputStream(subtitleUri);
-                return convertInputStreamToUTF(activity, subtitleUri, inputStream);
+                return convertInputStreamToUTF(activity, subtitleUri, inputStream, displayName);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -655,12 +664,23 @@ class Utils {
     }
 
     public static Uri convertInputStreamToUTF(Context context, Uri subtitleUri, InputStream inputStream) {
+        return convertInputStreamToUTF(context, subtitleUri, inputStream, null);
+    }
+
+    // Purist: large styled ASS files (and ones with embedded fonts) exceed the old 2 MB cap
+    private static final int MAX_CONVERTED_SUBTITLE_CHARS = 20_000_000;
+
+    public static Uri convertInputStreamToUTF(Context context, Uri subtitleUri, InputStream inputStream, String displayName) {
         try {
             DecodedInputStreamReader decodedInputStreamReader = Chardet.decode(inputStream, StandardCharsets.UTF_8);
             Charset charset = decodedInputStreamReader.charset();
             if (!StandardCharsets.UTF_8.equals(charset)) {
-                String filename = subtitleUri.getPath();
-                filename = filename.substring(filename.lastIndexOf("/") + 1);
+                String filename = displayName;
+                if (filename == null || filename.isEmpty()) {
+                    filename = subtitleUri.getPath();
+                    filename = filename.substring(filename.lastIndexOf("/") + 1);
+                }
+                filename = filename.replaceAll("[\\\\/:*?\"<>|]", "_");
                 final File file = new File(context.getCacheDir(), filename);
                 final BufferedReader bufferedReader = new BufferedReader(decodedInputStreamReader);
                 final BufferedWriter bufferedWriter = new BufferedWriter(new FileWriter(file));
@@ -671,7 +691,7 @@ class Utils {
                 while ((num = bufferedReader.read(buffer)) != -1) {
                     bufferedWriter.write(buffer, 0, num);
                     pass++;
-                    if (pass * 512 > 2_000_000) {
+                    if ((long) pass * 512 > MAX_CONVERTED_SUBTITLE_CHARS) {
                         success = false;
                         break;
                     }

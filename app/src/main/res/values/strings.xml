@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name" translatable="false">Just Player</string>
+    <string name="app_name" translatable="false">Purist Player</string>
     <string name="video_resize_fit">Fit</string>
     <string name="video_resize_crop">Crop</string>
     <string name="video_orientation_video">Video orientation</string>
@@ -58,4 +58,56 @@
     <string name="pref_subtitle_style_bold">Bold style</string>
     <string name="pref_subtitle_style_bold_on">Use bold typeface as regular</string>
     <string name="pref_subtitle_style_bold_off">Use default regular typeface</string>
+
+    <!-- Purist -->
+    <string name="purist_recheck_format">Recheck video format</string>
+    <string name="purist_subtitle_settings">Subtitle settings</string>
+    <string name="purist_speed_normal">Normal</string>
+    <string name="purist_format_unavailable">Video format not detected yet</string>
+    <string name="purist_track_mismatch">selected track differs from decoder input</string>
+    <string name="purist_sub_libass">Full ASS/SSA rendering (libass)</string>
+    <string name="purist_sub_libass_on">ASS/SSA subtitles look as authored: fonts, positioning, signs and karaoke. Drawn above the video, never into it. Style controls do not apply to them.</string>
+    <string name="purist_sub_libass_off">ASS/SSA subtitles are converted to plain text and use your subtitle style</string>
+    <string name="purist_sub_unsupported">Not a supported subtitle file</string>
+    <string name="purist_sub_vobsub_pick_sub">VobSub needs its .sub file too: pick the matching .sub</string>
+    <string name="purist_sub_vobsub_pick_idx">VobSub needs its .idx file too: pick the matching .idx</string>
+    <string name="purist_sub_delay">Delay</string>
+    <string name="purist_sub_delay_note">Positive = subtitles later, negative = earlier. Remembered per video.</string>
+    <string name="purist_sub_use_system">Use system caption style</string>
+    <string name="purist_sub_size">Size · %1$d%%</string>
+    <string name="purist_sub_text_color">Text colour</string>
+    <string name="purist_sub_border">Border</string>
+    <string name="purist_sub_background">Background</string>
+    <string name="purist_sub_bg_opacity">Background opacity · %1$d%%</string>
+    <string name="purist_sub_position">Position · %1$d%% from bottom</string>
+    <string name="purist_sub_embedded_styles">Apply embedded styles (ASS/SSA, TTML, WebVTT)</string>
+    <string name="purist_sub_embedded_sizes">Apply embedded font sizes</string>
+    <string name="purist_sub_limitations">Image-based subtitles (PGS, VobSub, DVB) can\'t be restyled. Border thickness is fixed by the renderer.</string>
+    <string name="purist_sub_system_settings">System caption settings</string>
+    <string name="purist_sub_reset">Reset style</string>
+    <string name="purist_sub_edge_none">None</string>
+    <string name="purist_sub_edge_outline">Outline</string>
+    <string name="purist_sub_edge_shadow">Shadow</string>
+    <string name="purist_sub_edge_raised">Raised</string>
+    <string name="purist_sub_edge_depressed">Depressed</string>
+    <string name="purist_sub_preview">Subtitle preview — the quick brown fox jumps over the lazy dog</string>
+    <string name="purist_sub_style_source">Subtitle style</string>
+    <string name="purist_sub_style_custom">Custom (Purist)</string>
+    <string name="purist_sub_style_system">System caption settings</string>
+    <string name="purist_sub_size_title">Text size (%)</string>
+    <string name="purist_sub_bg_opacity_title">Background opacity (%)</string>
+    <string name="purist_sub_position_title">Position from bottom (%)</string>
+    <string name="purist_sub_border_color">Border colour</string>
+    <string name="purist_sub_background_color">Background colour</string>
+    <string name="purist_color_white">White</string>
+    <string name="purist_color_yellow">Yellow</string>
+    <string name="purist_color_cyan">Cyan</string>
+    <string name="purist_color_green">Green</string>
+    <string name="purist_color_magenta">Magenta</string>
+    <string name="purist_color_red">Red</string>
+    <string name="purist_color_blue">Blue</string>
+    <string name="purist_color_grey">Grey</string>
+    <string name="purist_color_black">Black</string>
+    <string name="purist_debug_force_dv_base_layer" translatable="false">Force Dolby Vision base layer (debug)</string>
+    <string name="purist_debug_force_dv_base_layer_summary" translatable="false">Hide Dolby Vision decoders so DV tracks fall back to their HDR10/HLG/SDR base layer. Restart playback to apply.</string>
 </resources>

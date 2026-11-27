@@ -16,14 +16,26 @@ import java.util.List;
 
 class SubtitleUtils {
 
+    /** Purist: stable id of the external (sidecar) subtitle track, used to select it after loading. */
+    public static final String SIDECAR_ID = "purist-sidecar";
+
+    /** Extension-based fallback (case-insensitive); the real detection is SubtitleFormatDetector. */
     public static String getSubtitleMime(Uri uri) {
-        final String path = uri.getPath();
+        final String path = uri.getPath() != null ? uri.getPath().toLowerCase() : "";
         if (path.endsWith(".ssa") || path.endsWith(".ass")) {
             return MimeTypes.TEXT_SSA;
         } else if (path.endsWith(".vtt")) {
             return MimeTypes.TEXT_VTT;
         } else if (path.endsWith(".ttml") ||  path.endsWith(".xml") || path.endsWith(".dfxp")) {
             return MimeTypes.APPLICATION_TTML;
+        } else if (path.endsWith(".smi") || path.endsWith(".sami")) {
+            return com.brouken.player.subtitle.SubtitleMimes.TEXT_SAMI;
+        } else if (path.endsWith(".mpl")) {
+            return com.brouken.player.subtitle.SubtitleMimes.TEXT_MPL2;
+        } else if (path.endsWith(".sbv")) {
+            return com.brouken.player.subtitle.SubtitleMimes.TEXT_SUBVIEWER;
+        } else if (path.endsWith(".sub")) {
+            return com.brouken.player.subtitle.SubtitleMimes.TEXT_MICRODVD;
         } else {
             return MimeTypes.APPLICATION_SUBRIP;
         }
@@ -222,7 +234,12 @@ class SubtitleUtils {
             return false;
         final String name = file.getName().toLowerCase();
         return name.endsWith(".srt") || name.endsWith(".ssa") || name.endsWith(".ass")
-                || name.endsWith(".vtt") || name.endsWith(".ttml");
+                || name.endsWith(".vtt") || name.endsWith(".ttml")
+                // Purist: more text formats
+                || name.endsWith(".smi") || name.endsWith(".sami") || name.endsWith(".mpl") || name.endsWith(".sbv")
+                || name.endsWith(".dfxp")
+                // Purist: image subtitles (a VobSub .idx finds its .sub next to it)
+                || name.endsWith(".sup") || name.endsWith(".idx");
     }
 
     public static boolean isSubtitle(Uri uri, String mimeType) {
@@ -234,6 +251,11 @@ class SubtitleUtils {
             }
             if (mimeType.equals("text/plain") || mimeType.equals("text/x-ssa") || mimeType.equals("application/octet-stream") ||
                     mimeType.equals("application/ass") || mimeType.equals("application/ssa") || mimeType.equals("application/vtt")) {
+                return true;
+            }
+            // Purist: more subtitle formats
+            if (mimeType.equals("application/x-sami") || mimeType.equals("text/x-microdvd") || mimeType.equals("text/x-mpl2")
+                    || mimeType.equals("text/x-subviewer")) {
                 return true;
             }
         }
@@ -266,7 +288,16 @@ class SubtitleUtils {
     }
 
     public static MediaItem.SubtitleConfiguration buildSubtitle(Context context, Uri uri, String subtitleName, boolean selected) {
-        final String subtitleMime = SubtitleUtils.getSubtitleMime(uri);
+        return buildSubtitle(context, uri, subtitleName, selected, null, null);
+    }
+
+    /**
+     * @param mime detected format (null = guess from extension)
+     * @param id   stable track id (null = Media3 default)
+     */
+    public static MediaItem.SubtitleConfiguration buildSubtitle(Context context, Uri uri, String subtitleName, boolean selected,
+                                                                String mime, String id) {
+        final String subtitleMime = mime != null ? mime : SubtitleUtils.getSubtitleMime(uri);
         final String subtitleLanguage = SubtitleUtils.getSubtitleLanguage(uri);
         if (subtitleLanguage == null && subtitleName == null)
             subtitleName = Utils.getFileName(context, uri);
@@ -276,6 +307,9 @@ class SubtitleUtils {
                 .setLanguage(subtitleLanguage)
                 .setRoleFlags(C.ROLE_FLAG_SUBTITLE)
                 .setLabel(subtitleName);
+        if (id != null) {
+            subtitleConfigurationBuilder.setId(id);
+        }
         if (selected) {
             subtitleConfigurationBuilder.setSelectionFlags(C.SELECTION_FLAG_DEFAULT);
         }

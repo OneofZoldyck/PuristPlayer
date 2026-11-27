@@ -8,3 +8,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Purist: signing material stays out of git
+keystore.properties
+*.jks
+*.keystore
