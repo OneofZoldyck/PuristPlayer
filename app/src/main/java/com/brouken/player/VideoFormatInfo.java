@@ -115,6 +115,7 @@ public final class VideoFormatInfo {
      */
     public String detailLine(int panelNits, float hdrSdrRatio, @Nullable Boolean framesAdvancing) {
         StringBuilder sb = new StringBuilder(kindLabel());
+        String dvProfileLabel = currentDvProfileLabel();
         if (kind == Kind.DOLBY_VISION) {
             if (dvProfileLabel != null) sb.append(" · Profile ").append(dvProfileLabel);
         } else if (dolbyVisionFallback) {
@@ -209,9 +210,27 @@ public final class VideoFormatInfo {
         return false;
     }
 
+    /**
+     * The profile label as it is now: a profile 7 conversion only learns whether the enhancement layer was FEL or
+     * MEL once the first frames have been read, which is usually after the codec started.
+     */
+    @Nullable
+    private String currentDvProfileLabel() {
+        if (dvProfileLabel == null || com.brouken.player.dovi.DolbyVisionP7.conversionOf(trackFormat) == null) {
+            return dvProfileLabel;
+        }
+        return dolbyVisionProfileLabel(trackFormat, configuredProfile, baseLayerTransfer(trackFormat));
+    }
+
     /** "8.1" etc. Profile from the codecs string (dvhe.08.06), else from the configured MediaFormat profile. */
     @Nullable
     private static String dolbyVisionProfileLabel(@Nullable Format f, int configuredProfile, int transfer) {
+        // Purist: profile 7 converted to 8.1 while reading (enhancement layer dropped)
+        com.brouken.player.dovi.DolbyVisionP7.Conversion p7 = com.brouken.player.dovi.DolbyVisionP7.conversionOf(f);
+        if (p7 != null) {
+            String target = transfer == C.COLOR_TRANSFER_ST2084 || transfer == Format.NO_VALUE ? "8.1" : "8";
+            return "7" + (p7.elType != null ? " " + p7.elType : "") + " → " + target;
+        }
         int profile = -1;
         if (f != null && f.codecs != null) {
             for (String c : f.codecs.split(",")) {

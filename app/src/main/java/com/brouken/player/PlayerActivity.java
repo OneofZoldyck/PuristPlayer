@@ -219,6 +219,7 @@ public class PlayerActivity extends Activity {
     private static final long RECHECK_SAMPLE_MS = 700;
     private PuristRenderersFactory puristRenderersFactory;
     private LibassSupport libass;
+    @androidx.annotation.Nullable private com.brouken.player.mkv.IncompleteMatroskaDataSource.Factory incompleteMkvFactory;
     /** Purist: subtitle size setting relative to authored size, for libass and image subtitles. */
     private float subtitleRelativeScale = 1f;
     private FormatBadgeController formatBadge;
@@ -891,6 +892,12 @@ public class PlayerActivity extends Activity {
                                     + " maxConsecutiveDropped=" + c.maxConsecutiveDroppedBufferCount
                                     + " libass=" + (libass != null) + " pos=" + player.getCurrentPosition());
                         }
+                        com.brouken.player.dovi.DolbyVisionP7.Conversion p7 =
+                                com.brouken.player.dovi.DolbyVisionP7.conversionOf(player.getVideoFormat());
+                        if (p7 != null) {
+                            Log.i(PURIST_TAG, "dv7 conversion el=" + p7.elType + " rpusConverted=" + p7.convertedRpus
+                                    + " rpusKept=" + p7.unconvertedRpus + " elNalsDropped=" + p7.droppedElNals);
+                        }
                     }
                 } else {
                     recheckVideoFormat();
@@ -1491,10 +1498,18 @@ public class PlayerActivity extends Activity {
             puristRenderersFactory.setLibass(libass);
             mediaExtractorsFactory = libass.wrapExtractors(extractorsFactory);
         }
+        // Purist: Dolby Vision profile 7 (Blu-ray dual layer) is converted to profile 8.1 automatically while it is
+        // read, so the Dolby Vision decoder plays it instead of falling back to the HDR10 base layer. Other files
+        // pass straight through; nothing happens on devices without a profile 8 Dolby Vision decoder.
+        mediaExtractorsFactory = new com.brouken.player.dovi.DolbyVisionP7ExtractorsFactory(mediaExtractorsFactory);
+        // Purist: incomplete Matroska downloads (index missing at the end) play up to where the data ends, with
+        // seeking, instead of never starting. Complete and non-local files pass straight through.
+        incompleteMkvFactory = new com.brouken.player.mkv.IncompleteMatroskaDataSource.Factory(this,
+                new androidx.media3.datasource.DefaultDataSource.Factory(this));
         ExoPlayer.Builder playerBuilder = new ExoPlayer.Builder(this, renderersFactory)
                 .setTrackSelector(trackSelector)
                 .setMediaSourceFactory(new com.brouken.player.subtitle.BitmapSubtitleMediaSourceFactory(this,
-                        new DefaultMediaSourceFactory(this, mediaExtractorsFactory)
+                        new DefaultMediaSourceFactory(incompleteMkvFactory, mediaExtractorsFactory)
                                 .setSubtitleParserFactory(subtitleParserFactory)));
 
         if (haveMedia && isNetworkUri) {
@@ -1796,6 +1811,23 @@ public class PlayerActivity extends Activity {
         }
     }
 
+    /** Purist: says so when an incomplete download is being played (it ends where the downloaded data ends). */
+    private void maybeShowIncompleteFileNotice() {
+        if (incompleteMkvFactory == null || mPrefs.mediaUri == null) return;
+        com.brouken.player.mkv.MatroskaRepair.Result r = incompleteMkvFactory.peek(mPrefs.mediaUri);
+        if (r == null) return;
+        String text = r.playableDurationMs > 0 && r.originalDurationMs > 0
+                ? getString(R.string.purist_incomplete_file_duration, formatClock(r.playableDurationMs), formatClock(r.originalDurationMs))
+                : getString(R.string.purist_incomplete_file);
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show();
+    }
+
+    private static String formatClock(long ms) {
+        long s = ms / 1000;
+        return s >= 3600 ? String.format(java.util.Locale.ROOT, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                : String.format(java.util.Locale.ROOT, "%d:%02d", s / 60, s % 60);
+    }
+
     /** Auto badge: once per media URI, a moment after playback with a rendered first frame starts. */
     private void maybeScheduleAutoBadge() {
         if (!badgeFirstFrameRendered || player == null || !player.isPlaying() || mPrefs.mediaUri == null) return;
@@ -2037,6 +2069,7 @@ public class PlayerActivity extends Activity {
 
                 if (videoLoading) {
                     videoLoading = false;
+                    maybeShowIncompleteFileNotice();
 
                     if (mPrefs.orientation == Utils.Orientation.UNSPECIFIED) {
                         mPrefs.orientation = Utils.getNextOrientation(mPrefs.orientation);

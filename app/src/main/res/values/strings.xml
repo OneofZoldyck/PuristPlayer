@@ -109,5 +109,8 @@
     <string name="purist_color_grey">Grey</string>
     <string name="purist_color_black">Black</string>
     <string name="purist_debug_force_dv_base_layer" translatable="false">Force Dolby Vision base layer (debug)</string>
+    <string name="purist_incomplete_file_scanning">Incomplete file: building a seek index (first time only)</string>
+    <string name="purist_incomplete_file">Incomplete file: playing the part that was downloaded</string>
+    <string name="purist_incomplete_file_duration">Incomplete file: %1$s of %2$s can be played</string>
     <string name="purist_debug_force_dv_base_layer_summary" translatable="false">Hide Dolby Vision decoders so DV tracks fall back to their HDR10/HLG/SDR base layer. Restart playback to apply.</string>
 </resources>
