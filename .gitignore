@@ -13,3 +13,7 @@ local.properties
 keystore.properties
 *.jks
 *.keystore
+
+# Purist: built APKs are kept out of the repo
+APKBuilds/
+*.apk

@@ -1,0 +1,6 @@
+Purist Player is a modified version of Just Player, an open source Android video player, made for watching Dolby Vision and HDR video on a phone.
+It shows which HDR format the hardware decoder is really using when a video starts, and a Recheck option in the gear menu adds the Dolby Vision profile, an estimated panel brightness in nits and the HDR/SDR ratio.
+The detection works by subclassing the Media3 video renderer to read the configured codec and by scanning the video stream for HDR10+ and Dolby Vision metadata.
+Subtitles gained a per-video delay, a style panel for size, colour, edges and background, and support for SAMI, MicroDVD, MPL2, SubViewer, SBV, TMPlayer, PGS and VobSub files.
+ASS subtitles are drawn by libass in a layer above the video, so the video frames are never changed.
+The app is written in Java on AndroidX Media3 1.12 and uses the ass-media library for libass, with custom Media3 extractors for the new subtitle formats.
